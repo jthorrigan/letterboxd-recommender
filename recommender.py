@@ -507,7 +507,11 @@ class MovieRecommender:
 
         # Filter highly rated movies safely
         try:
-            highly_rated_movies = self.enriched_ratings[self.enriched_ratings['rating'] >= 4.0]
+            # Handle NaN values in rating column to prevent ambiguous boolean errors
+            highly_rated_movies = self.enriched_ratings[
+                (self.enriched_ratings['rating'].notna()) & 
+                (self.enriched_ratings['rating'] >= 4.0)
+            ]
         except (KeyError, ValueError, TypeError):
             return 0.0, ""
 
