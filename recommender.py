@@ -111,7 +111,7 @@ class MovieRecommender:
         # Filter safely to avoid ambiguous truth value errors
         try:
             result = self.user_ratings[self.user_ratings['rating'] >= threshold]
-            # Force evaluation to prevent lazy evaluation issues
+            # Create independent copy to avoid view-based DataFrame issues
             return result.copy()
         except (KeyError, ValueError, TypeError):
             return pd.DataFrame()
@@ -159,7 +159,7 @@ class MovieRecommender:
         # Filter safely to avoid ambiguous truth value errors
         try:
             highly_rated = enriched_df[enriched_df['rating'] >= 4.0]
-            # Force evaluation to prevent lazy evaluation issues
+            # Create independent copy to avoid view-based DataFrame issues
             highly_rated = highly_rated.copy()
         except (KeyError, ValueError, TypeError):
             return
@@ -342,7 +342,7 @@ class MovieRecommender:
             # Filter safely to avoid ambiguous truth value errors
             try:
                 highly_rated = self.user_ratings[self.user_ratings['rating'] >= 4.0]
-                # Force evaluation to prevent lazy evaluation issues
+                # Create independent copy to avoid view-based DataFrame issues
                 highly_rated = highly_rated.copy()
             except (KeyError, ValueError, TypeError):
                 highly_rated = pd.DataFrame()
@@ -529,7 +529,7 @@ class MovieRecommender:
             # Handle NaN values in rating column to prevent ambiguous boolean errors
             mask = (self.enriched_ratings['rating'].notna()) & (self.enriched_ratings['rating'] >= 4.0)
             highly_rated_movies = self.enriched_ratings[mask]
-            # Force evaluation to prevent lazy evaluation issues
+            # Create independent copy to avoid view-based DataFrame issues
             highly_rated_movies = highly_rated_movies.copy()
         except (KeyError, ValueError, TypeError):
             return 0.0, ""

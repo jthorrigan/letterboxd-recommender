@@ -214,7 +214,7 @@ class DataProcessor:
         # Filter safely to avoid ambiguous truth value errors
         try:
             result = self.ratings_df[self.ratings_df['rating'] >= threshold]
-            # Force evaluation to prevent lazy evaluation issues
+            # Create independent copy to avoid view-based DataFrame issues
             return result.copy()
         except (KeyError, ValueError, TypeError) as e:
             print(f"Error filtering highly rated movies: {e}")
@@ -229,7 +229,7 @@ class DataProcessor:
         try:
             mask = (self.user_movies['year'] >= start_year) & (self.user_movies['year'] <= end_year)
             result = self.user_movies[mask]
-            # Force evaluation to prevent lazy evaluation issues
+            # Create independent copy to avoid view-based DataFrame issues
             return result.copy()
         except (KeyError, ValueError, TypeError) as e:
             print(f"Error filtering movies by year range: {e}")
