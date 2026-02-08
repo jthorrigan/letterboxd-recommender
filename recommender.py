@@ -84,8 +84,9 @@ class MovieRecommender:
             profile['avg_rating'] = self.user_ratings['rating'].mean()
             profile['rating_std'] = self.user_ratings['rating'].std()
             
-            # Get highly rated movies (>= 4.0)
-            highly_rated = self._get_highly_rated_movies()
+        # Get highly rated movies (>= 4.0)
+        highly_rated = self._get_highly_rated_movies()
+        if not highly_rated.empty and all(col in highly_rated.columns for col in ['title', 'year', 'rating']):
             profile['highly_rated_movies'] = highly_rated[['title', 'year', 'rating']].to_dict('records')
         
         # Watched titles for filtering
