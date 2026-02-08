@@ -24,14 +24,14 @@ def process_csv_upload(ratings_file, watchlist_file=None, watched_file=None):
     global processor, recommender, visualizer
     
     if ratings_file is None:
-        return "❌ Please upload at least a ratings.csv file", "", None, None, None, None, None
+        return "❌ Please upload at least a ratings.csv file", gr.Dropdown(choices=[]), None, None, None, None, None
     
     try:
         processor = DataProcessor()
         result = processor.process_csv_files(ratings_file, watchlist_file, watched_file)
         
         if not result['success']:
-            return f"❌ Error: {result['error']}", "", None, None, None, None, None
+            return f"❌ Error: {result['error']}", gr.Dropdown(choices=[]), None, None, None, None, None
         
         # Initialize recommender and visualizer
         recommender = MovieRecommender(result['ratings'])
@@ -52,10 +52,10 @@ def process_csv_upload(ratings_file, watchlist_file=None, watched_file=None):
         
         success_msg = f"✅ Successfully loaded {result['stats']['total_ratings']} ratings!\n\n{stats_text}"
         
-        return success_msg, movie_list, rating_dist, ratings_time, watch_freq, year_dist, rating_trends
+        return success_msg, gr.Dropdown(choices=movie_list), rating_dist, ratings_time, watch_freq, year_dist, rating_trends
         
     except Exception as e:
-        return f"❌ Error processing files: {str(e)}", "", None, None, None, None, None
+        return f"❌ Error processing files: {str(e)}", gr.Dropdown(choices=[]), None, None, None, None, None
 
 
 def scrape_letterboxd_profile(username):
@@ -63,17 +63,17 @@ def scrape_letterboxd_profile(username):
     global processor, recommender, visualizer
     
     if not username or username.strip() == "":
-        return "❌ Please enter a Letterboxd username", "", None, None, None, None, None
+        return "❌ Please enter a Letterboxd username", gr.Dropdown(choices=[]), None, None, None, None, None
     
     try:
         scraper = LetterboxdScraper()
         result = scraper.scrape_user_profile(username.strip())
         
         if not result['success']:
-            return f"❌ Error: {result['error']}", "", None, None, None, None, None
+            return f"❌ Error: {result['error']}", gr.Dropdown(choices=[]), None, None, None, None, None
         
         if len(result['ratings']) == 0:
-            return "❌ No ratings found for this profile", "", None, None, None, None, None
+            return "❌ No ratings found for this profile", gr.Dropdown(choices=[]), None, None, None, None, None
         
         # Process the scraped data
         processor = DataProcessor()
@@ -103,10 +103,10 @@ def scrape_letterboxd_profile(username):
         if stats['average_rating']:
             success_msg += f"- Average rating: {stats['average_rating']:.2f} / 5.0\n"
         
-        return success_msg, movie_list, rating_dist, ratings_time, watch_freq, year_dist, rating_trends
+        return success_msg, gr.Dropdown(choices=movie_list), rating_dist, ratings_time, watch_freq, year_dist, rating_trends
         
     except Exception as e:
-        return f"❌ Error scraping profile: {str(e)}", "", None, None, None, None, None
+        return f"❌ Error scraping profile: {str(e)}", gr.Dropdown(choices=[]), None, None, None, None, None
 
 
 def get_recommendations(n_recs, min_year, max_year):
@@ -237,9 +237,6 @@ with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as app:
     gr.Markdown(f"# {APP_TITLE}")
     gr.Markdown(APP_DESCRIPTION)
     
-    # Shared state for movie list
-    movie_list_state = gr.State([])
-    
     with gr.Tabs():
         
         # Tab 1: Data Import
@@ -271,13 +268,6 @@ with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as app:
                     scrape_btn = gr.Button("🔍 Scrape Profile", variant="primary")
             
             import_status = gr.Markdown("")
-            
-            # Hidden outputs for visualizations (will be passed to other tabs)
-            vis_rating_dist = gr.Plot(visible=False)
-            vis_ratings_time = gr.Plot(visible=False)
-            vis_watch_freq = gr.Plot(visible=False)
-            vis_year_dist = gr.Plot(visible=False)
-            vis_rating_trends = gr.Plot(visible=False)
         
         # Tab 2: Get Recommendations
         with gr.Tab("🎬 Recommendations"):
@@ -408,21 +398,13 @@ with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as app:
         inputs=[ratings_upload, watchlist_upload, watched_upload],
         outputs=[
             import_status, 
-            movie_list_state,
-            vis_rating_dist,
-            vis_ratings_time,
-            vis_watch_freq,
-            vis_year_dist,
-            vis_rating_trends
+            movie_dropdown,
+            plot_rating_dist,
+            plot_ratings_time,
+            plot_watch_freq,
+            plot_year_dist,
+            plot_rating_trends
         ]
-    ).then(
-        fn=lambda movies: gr.Dropdown(choices=movies),
-        inputs=[movie_list_state],
-        outputs=[movie_dropdown]
-    ).then(
-        fn=lambda rd, rt, wf, yd, rtr: (rd, rt, wf, yd, rtr),
-        inputs=[vis_rating_dist, vis_ratings_time, vis_watch_freq, vis_year_dist, vis_rating_trends],
-        outputs=[plot_rating_dist, plot_ratings_time, plot_watch_freq, plot_year_dist, plot_rating_trends]
     )
     
     # Scrape profile
@@ -431,21 +413,13 @@ with gr.Blocks(title=APP_TITLE, theme=gr.themes.Soft()) as app:
         inputs=[username_input],
         outputs=[
             import_status,
-            movie_list_state,
-            vis_rating_dist,
-            vis_ratings_time,
-            vis_watch_freq,
-            vis_year_dist,
-            vis_rating_trends
+            movie_dropdown,
+            plot_rating_dist,
+            plot_ratings_time,
+            plot_watch_freq,
+            plot_year_dist,
+            plot_rating_trends
         ]
-    ).then(
-        fn=lambda movies: gr.Dropdown(choices=movies),
-        inputs=[movie_list_state],
-        outputs=[movie_dropdown]
-    ).then(
-        fn=lambda rd, rt, wf, yd, rtr: (rd, rt, wf, yd, rtr),
-        inputs=[vis_rating_dist, vis_ratings_time, vis_watch_freq, vis_year_dist, vis_rating_trends],
-        outputs=[plot_rating_dist, plot_ratings_time, plot_watch_freq, plot_year_dist, plot_rating_trends]
     )
     
     # Get recommendations
