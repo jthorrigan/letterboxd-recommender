@@ -1,6 +1,6 @@
 """
 Data processing module for Letterboxd data
-Handles CSV import, cleaning, and preprocessing
+Handles CSV import, cleaning, and preprocessing with TMDB enrichment
 """
 import pandas as pd
 import numpy as np
@@ -8,15 +8,18 @@ from typing import Dict, List, Optional, Tuple
 import re
 from datetime import datetime
 
+from movie_metadata import TMDBClient
+
 
 class DataProcessor:
-    """Process and clean Letterboxd data"""
+    """Process and clean Letterboxd data with TMDB enrichment"""
     
-    def __init__(self):
+    def __init__(self, tmdb_client: Optional[TMDBClient] = None):
         self.ratings_df = None
         self.watchlist_df = None
         self.watched_df = None
         self.user_movies = None
+        self.tmdb_client = tmdb_client or TMDBClient()
         
     def process_csv_files(self, ratings_file, watchlist_file=None, watched_file=None) -> Dict:
         """

@@ -1,77 +1,292 @@
 """
-Movie recommendation engine with hybrid approach
-Combines collaborative filtering, content-based filtering, and semantic analysis
+Enhanced movie recommendation engine with TMDB integration
+Combines genre matching, director/actor preferences, semantic similarity, and diversity
 """
 import pandas as pd
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.preprocessing import MinMaxScaler
-from typing import List, Dict, Tuple, Optional
+from sklearn.feature_extraction.text import TfidfVectorizer
+from typing import List, Dict, Tuple, Optional, Set
 import re
-from collections import Counter
+from collections import Counter, defaultdict
+import warnings
+
+try:
+    from sentence_transformers import SentenceTransformer
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+    warnings.warn("sentence-transformers not available. Semantic similarity disabled.")
+
+from movie_metadata import TMDBClient
 from config import (
-    DEFAULT_N_RECOMMENDATIONS, 
-    MIN_SIMILARITY_SCORE,
-    CONTENT_WEIGHT,
-    COLLABORATIVE_WEIGHT,
+    DEFAULT_N_RECOMMENDATIONS,
+    GENRE_WEIGHT,
+    DIRECTOR_CAST_WEIGHT,
     SEMANTIC_WEIGHT,
-    MIN_RATINGS_FOR_CF
+    YEAR_WEIGHT,
+    TMDB_SIMILAR_WEIGHT,
+    MIN_TMDB_RATING,
+    MIN_TMDB_VOTES,
+    MAX_SAME_DIRECTOR,
+    DIVERSITY_PENALTY,
+    EMBEDDING_MODEL,
+    TMDB_API_KEY
 )
 
 
 class MovieRecommender:
-    """Hybrid movie recommendation system"""
+    """Enhanced hybrid movie recommendation system"""
     
-    def __init__(self, user_ratings_df: pd.DataFrame):
+    def __init__(self, user_ratings_df: pd.DataFrame, tmdb_client: Optional[TMDBClient] = None):
         """
         Initialize recommender with user's rating data
         
         Args:
             user_ratings_df: DataFrame with columns [title, year, rating]
+            tmdb_client: Optional TMDBClient for metadata fetching
         """
         self.user_ratings = user_ratings_df
+        self.tmdb_client = tmdb_client or TMDBClient()
         self.user_profile = self._build_user_profile()
+        self.enriched_ratings = self._enrich_user_ratings()
+        
+        # Initialize embedding model if available
+        self.embedding_model = None
+        if SENTENCE_TRANSFORMERS_AVAILABLE:
+            try:
+                self.embedding_model = SentenceTransformer(EMBEDDING_MODEL)
+            except Exception as e:
+                print(f"Could not load embedding model: {e}")
+        
+        # Build candidate pool
+        self.candidate_movies = self._build_candidate_pool()
         
     def _build_user_profile(self) -> Dict:
-        """Build user preference profile"""
+        """Build comprehensive user preference profile"""
         profile = {
             'avg_rating': 0,
             'rating_std': 0,
             'highly_rated_movies': [],
-            'favorite_years': [],
-            'total_ratings': 0
+            'favorite_genres': [],
+            'favorite_directors': [],
+            'favorite_actors': [],
+            'favorite_decades': [],
+            'total_ratings': 0,
+            'watched_titles_lower': set()
         }
         
         if len(self.user_ratings) == 0:
             return profile
         
+        # Basic stats
         if 'rating' in self.user_ratings.columns:
             profile['avg_rating'] = self.user_ratings['rating'].mean()
             profile['rating_std'] = self.user_ratings['rating'].std()
             
             # Get highly rated movies (>= 4.0)
             highly_rated = self.user_ratings[self.user_ratings['rating'] >= 4.0]
-            profile['highly_rated_movies'] = highly_rated['title'].tolist()
+            profile['highly_rated_movies'] = highly_rated[['title', 'year', 'rating']].to_dict('records')
         
+        # Watched titles for filtering
+        if 'title' in self.user_ratings.columns:
+            profile['watched_titles_lower'] = set(self.user_ratings['title'].str.lower())
+        
+        # Year preferences
         if 'year' in self.user_ratings.columns:
-            # Find favorite decades
             years = self.user_ratings['year'].dropna()
             if len(years) > 0:
                 decades = (years // 10) * 10
-                profile['favorite_years'] = decades.value_counts().head(3).index.tolist()
+                profile['favorite_decades'] = decades.value_counts().head(3).index.tolist()
         
         profile['total_ratings'] = len(self.user_ratings)
         
         return profile
     
+    def _enrich_user_ratings(self) -> pd.DataFrame:
+        """Enrich user ratings with TMDB metadata"""
+        if not self.tmdb_client.is_enabled():
+            return self.user_ratings
+        
+        enriched = self.user_ratings.copy()
+        
+        # Add metadata columns
+        enriched['genres'] = None
+        enriched['directors'] = None
+        enriched['cast'] = None
+        enriched['keywords'] = None
+        enriched['overview'] = None
+        enriched['tmdb_id'] = None
+        
+        # Fetch metadata for highly rated movies
+        highly_rated = enriched[enriched['rating'] >= 4.0] if 'rating' in enriched.columns else enriched
+        
+        for idx, row in highly_rated.iterrows():
+            metadata = self.tmdb_client.get_movie_metadata(row['title'], row.get('year'))
+            
+            if metadata:
+                enriched.at[idx, 'genres'] = metadata.get('genres', [])
+                enriched.at[idx, 'directors'] = metadata.get('directors', [])
+                enriched.at[idx, 'cast'] = metadata.get('cast', [])
+                enriched.at[idx, 'keywords'] = metadata.get('keywords', [])
+                enriched.at[idx, 'overview'] = metadata.get('overview', '')
+                enriched.at[idx, 'tmdb_id'] = metadata.get('tmdb_id')
+        
+        # Update user profile with genre/director/actor preferences
+        self._update_profile_from_metadata(enriched)
+        
+        return enriched
+    
+    def _update_profile_from_metadata(self, enriched_df: pd.DataFrame):
+        """Update user profile with preferences from enriched metadata"""
+        if 'rating' not in enriched_df.columns:
+            return
+        
+        # Analyze highly rated movies
+        highly_rated = enriched_df[enriched_df['rating'] >= 4.0]
+        
+        # Genre preferences (weighted by rating)
+        genre_scores = Counter()
+        for _, row in highly_rated.iterrows():
+            if row['genres'] and isinstance(row['genres'], list):
+                for genre in row['genres']:
+                    genre_scores[genre] += row['rating']
+        
+        self.user_profile['favorite_genres'] = [g for g, _ in genre_scores.most_common(5)]
+        
+        # Director preferences
+        director_scores = Counter()
+        for _, row in highly_rated.iterrows():
+            if row['directors'] and isinstance(row['directors'], list):
+                for director in row['directors']:
+                    director_scores[director] += row['rating']
+        
+        self.user_profile['favorite_directors'] = [d for d, _ in director_scores.most_common(5)]
+        
+        # Actor preferences (weight by rating and position in cast)
+        actor_scores = Counter()
+        for _, row in highly_rated.iterrows():
+            if row['cast'] and isinstance(row['cast'], list):
+                for i, actor in enumerate(row['cast'][:5]):  # Top 5 cast
+                    # Weight by position (lead actors count more)
+                    weight = row['rating'] * (1.0 - i * 0.1)
+                    actor_scores[actor] += weight
+        
+        self.user_profile['favorite_actors'] = [a for a, _ in actor_scores.most_common(10)]
+    
+    def _build_candidate_pool(self) -> List[Dict]:
+        """Build a pool of candidate movies to recommend"""
+        if not self.tmdb_client.is_enabled():
+            # Fallback: use basic acclaimed movies list
+            return self._get_basic_candidate_pool()
+        
+        candidates = []
+        seen_ids = set()
+        
+        # Get similar movies from TMDB for highly rated films
+        highly_rated = self.enriched_ratings[self.enriched_ratings['rating'] >= 4.0] if 'rating' in self.enriched_ratings.columns else self.enriched_ratings
+        
+        for _, movie in highly_rated.head(10).iterrows():
+            # Get TMDB similar movies
+            if pd.notna(movie.get('tmdb_id')):
+                similar = self.tmdb_client.get_similar_movies(int(movie['tmdb_id']), limit=10)
+                
+                for sim_movie in similar:
+                    movie_id = sim_movie.get('id')
+                    if movie_id and movie_id not in seen_ids:
+                        seen_ids.add(movie_id)
+                        
+                        # Fetch full metadata
+                        metadata = self.tmdb_client.get_movie_metadata(
+                            sim_movie.get('title', ''),
+                            self._extract_year(sim_movie.get('release_date'))
+                        )
+                        
+                        if metadata and self._passes_quality_filter(metadata):
+                            candidates.append(metadata)
+        
+        # Add movies from favorite genres and directors
+        # (In a real implementation, would query TMDB for these)
+        
+        return candidates
+    
+    def _get_basic_candidate_pool(self) -> List[Dict]:
+        """Fallback candidate pool when TMDB is not available"""
+        # Return a list of acclaimed movies (simplified version)
+        acclaimed = [
+            {"title": "The Shawshank Redemption", "year": 1994, "genres": ["Drama"]},
+            {"title": "The Godfather", "year": 1972, "genres": ["Crime", "Drama"]},
+            {"title": "Pulp Fiction", "year": 1994, "genres": ["Crime", "Drama"]},
+            {"title": "The Dark Knight", "year": 2008, "genres": ["Action", "Crime", "Drama"]},
+            {"title": "Schindler's List", "year": 1993, "genres": ["Biography", "Drama", "History"]},
+            {"title": "Fight Club", "year": 1999, "genres": ["Drama"]},
+            {"title": "The Matrix", "year": 1999, "genres": ["Action", "Sci-Fi"]},
+            {"title": "Goodfellas", "year": 1990, "genres": ["Biography", "Crime", "Drama"]},
+            {"title": "Parasite", "year": 2019, "genres": ["Comedy", "Drama", "Thriller"]},
+            {"title": "Interstellar", "year": 2014, "genres": ["Adventure", "Drama", "Sci-Fi"]},
+            {"title": "Spirited Away", "year": 2001, "genres": ["Animation", "Adventure", "Family"]},
+            {"title": "Whiplash", "year": 2014, "genres": ["Drama", "Music"]},
+            {"title": "Inception", "year": 2010, "genres": ["Action", "Sci-Fi", "Thriller"]},
+            {"title": "The Prestige", "year": 2006, "genres": ["Drama", "Mystery", "Thriller"]},
+            {"title": "The Departed", "year": 2006, "genres": ["Crime", "Drama", "Thriller"]},
+        ]
+        
+        # Filter out already watched
+        return [
+            m for m in acclaimed
+            if m['title'].lower() not in self.user_profile['watched_titles_lower']
+        ]
+    
+    def _passes_quality_filter(self, metadata: Dict) -> bool:
+        """Check if a movie passes quality thresholds"""
+        # Check rating and vote count
+        rating = metadata.get('vote_average', 0)
+        votes = metadata.get('vote_count', 0)
+        
+        if rating < MIN_TMDB_RATING or votes < MIN_TMDB_VOTES:
+            return False
+        
+        # Check if already watched
+        title = metadata.get('title', '').lower()
+        if title in self.user_profile['watched_titles_lower']:
+            return False
+        
+        # Filter out obvious sequels/prequels of watched movies
+        if self._is_sequel_of_watched(title):
+            return False
+        
+        return True
+    
+    def _is_sequel_of_watched(self, title: str) -> bool:
+        """Check if movie appears to be a sequel of a watched movie"""
+        title_lower = title.lower()
+        
+        # Common sequel patterns
+        sequel_patterns = [
+            r'\s+(?:ii|iii|iv|v|vi|vii|viii|ix|x)(?:\s|$)',
+            r'\s+(?:2|3|4|5|6|7|8|9)(?:\s|:|$)',
+            r':\s*(?:part|chapter|episode)\s+\d+',
+            r'\s+(?:returns|revenge|reloaded|resurrection|the sequel|strikes back)',
+        ]
+        
+        for pattern in sequel_patterns:
+            if re.search(pattern, title_lower):
+                # Check if base title is in watched movies
+                base_title = re.sub(pattern, '', title_lower).strip()
+                for watched in self.user_profile['watched_titles_lower']:
+                    if base_title in watched or watched in base_title:
+                        return True
+        
+        return False
+    
     def get_recommendations(
-        self, 
+        self,
         n: int = DEFAULT_N_RECOMMENDATIONS,
         min_year: Optional[int] = None,
         max_year: Optional[int] = None
     ) -> List[Dict]:
         """
-        Get personalized movie recommendations with explanations
+        Get personalized movie recommendations with detailed explanations
         
         Args:
             n: Number of recommendations to return
@@ -89,8 +304,8 @@ class MovieRecommender:
                 'explanation': 'Please rate at least 3 movies to get recommendations'
             }]
         
-        # Get highly rated movies for content-based recommendations
-        highly_rated = self.user_ratings[self.user_ratings['rating'] >= 4.0]
+        # Get highly rated movies
+        highly_rated = self.user_ratings[self.user_ratings['rating'] >= 4.0] if 'rating' in self.user_ratings.columns else self.user_ratings
         
         if len(highly_rated) == 0:
             return [{
@@ -100,86 +315,304 @@ class MovieRecommender:
                 'explanation': 'Please rate some movies 4.0 or higher to get recommendations'
             }]
         
-        # Generate recommendations based on user preferences
-        recommendations = []
+        # Show warning if TMDB not enabled
+        if not self.tmdb_client.is_enabled():
+            print("⚠️ TMDB API key not configured. Recommendations are limited. See README for setup.")
         
-        # Strategy 1: Recommend based on year preferences
-        if 'year' in self.user_ratings.columns and self.user_profile['favorite_years']:
-            for fav_year in self.user_profile['favorite_years'][:2]:
-                decade_start = int(fav_year)
-                decade_end = int(fav_year) + 9
-                
-                # Sample movies from favorite decade
-                decade_movies = self._get_sample_movies_by_decade(decade_start, decade_end)
-                
-                for movie in decade_movies:
-                    if movie not in [r['title'] for r in recommendations]:
-                        recommendations.append({
-                            'title': movie,
-                            'year': int(np.random.randint(decade_start, decade_end + 1)),
-                            'score': 0.85,
-                            'explanation': f"Based on your preference for {decade_start}s movies"
-                        })
+        # Score all candidate movies
+        scored_candidates = []
         
-        # Strategy 2: Recommend similar to highly rated movies
-        for _, movie in highly_rated.head(5).iterrows():
-            similar_movies = self._find_similar_by_title(movie['title'])
+        for candidate in self.candidate_movies:
+            # Apply year filters
+            if min_year and candidate.get('year') and candidate['year'] < min_year:
+                continue
+            if max_year and candidate.get('year') and candidate['year'] > max_year:
+                continue
             
-            for sim_movie in similar_movies:
-                if sim_movie not in [r['title'] for r in recommendations]:
-                    recommendations.append({
-                        'title': sim_movie,
-                        'year': movie.get('year'),
-                        'score': 0.90,
-                        'explanation': f"Similar to '{movie['title']}' which you rated {movie['rating']:.1f}"
-                    })
-        
-        # Strategy 3: Recommend popular critically acclaimed films
-        acclaimed_movies = self._get_acclaimed_movies()
-        for movie_title in acclaimed_movies:
-            if movie_title not in [r['title'] for r in recommendations]:
-                recommendations.append({
-                    'title': movie_title,
-                    'year': None,
-                    'score': 0.75,
-                    'explanation': "Highly acclaimed film matching your taste"
+            # Calculate hybrid score
+            score, explanation_parts = self._calculate_hybrid_score(candidate)
+            
+            if score > 0:
+                scored_candidates.append({
+                    'title': candidate.get('title', ''),
+                    'year': candidate.get('year'),
+                    'score': score,
+                    'explanation': self._format_explanation(explanation_parts),
+                    'metadata': candidate
                 })
         
-        # Apply year filters if specified
-        if min_year or max_year:
-            recommendations = [
-                r for r in recommendations 
-                if (min_year is None or (r['year'] and r['year'] >= min_year)) and
-                   (max_year is None or (r['year'] and r['year'] <= max_year))
-            ]
+        # Sort by score
+        scored_candidates.sort(key=lambda x: x['score'], reverse=True)
         
-        # Remove movies already watched
-        watched_titles = set(self.user_ratings['title'].str.lower())
-        recommendations = [
-            r for r in recommendations 
-            if r['title'].lower() not in watched_titles
-        ]
+        # Apply diversity filter
+        diverse_recommendations = self._apply_diversity_filter(scored_candidates, n * 2)
         
-        # Sort by score and return top N
-        recommendations.sort(key=lambda x: x['score'], reverse=True)
-        
-        return recommendations[:n]
+        # Return top N
+        return diverse_recommendations[:n]
     
-    def find_similar_movies(
-        self, 
-        movie_title: str, 
-        n: int = 10
-    ) -> List[Dict]:
+    def _calculate_hybrid_score(self, candidate: Dict) -> Tuple[float, Dict]:
         """
-        Find movies similar to a specific movie
+        Calculate hybrid recommendation score with multiple factors
         
-        Args:
-            movie_title: Title of the reference movie
-            n: Number of similar movies to return
-            
         Returns:
-            List of similar movies with similarity scores and explanations
+            Tuple of (score, explanation_parts)
         """
+        scores = {}
+        explanation = {}
+        
+        # 1. Genre match score (30%)
+        genre_score, genre_exp = self._genre_preference_score(candidate)
+        scores['genre'] = genre_score * GENRE_WEIGHT
+        explanation['genre'] = genre_exp
+        
+        # 2. Director/Cast match (20%)
+        director_cast_score, dc_exp = self._director_actor_score(candidate)
+        scores['director_cast'] = director_cast_score * DIRECTOR_CAST_WEIGHT
+        explanation['director_cast'] = dc_exp
+        
+        # 3. Semantic similarity (25%)
+        semantic_score, sem_exp = self._semantic_similarity_score(candidate)
+        scores['semantic'] = semantic_score * SEMANTIC_WEIGHT
+        explanation['semantic'] = sem_exp
+        
+        # 4. Year/Era preference (10%)
+        year_score, year_exp = self._year_preference_score(candidate)
+        scores['year'] = year_score * YEAR_WEIGHT
+        explanation['year'] = year_exp
+        
+        # 5. TMDB similarity (15%) - already baked into candidate selection
+        scores['tmdb_similar'] = 0.85 * TMDB_SIMILAR_WEIGHT
+        explanation['tmdb_similar'] = "Similar to your highly rated films"
+        
+        # Total score
+        total_score = sum(scores.values())
+        
+        return total_score, explanation
+    
+    def _genre_preference_score(self, candidate: Dict) -> Tuple[float, str]:
+        """Calculate score based on genre matching"""
+        candidate_genres = candidate.get('genres', [])
+        
+        if not candidate_genres or not self.user_profile['favorite_genres']:
+            return 0.0, ""
+        
+        # Calculate overlap with favorite genres
+        candidate_genres_set = set(candidate_genres) if isinstance(candidate_genres, list) else set()
+        favorite_genres_set = set(self.user_profile['favorite_genres'])
+        
+        overlap = candidate_genres_set & favorite_genres_set
+        
+        if not overlap:
+            return 0.0, ""
+        
+        # Score based on overlap (max 1.0)
+        score = len(overlap) / min(len(candidate_genres_set), len(favorite_genres_set))
+        
+        # Create explanation
+        genres_list = ", ".join(list(overlap)[:3])
+        explanation = f"Matches your favorite genres: {genres_list}"
+        
+        return score, explanation
+    
+    def _director_actor_score(self, candidate: Dict) -> Tuple[float, str]:
+        """Calculate score based on director and actor preferences"""
+        score = 0.0
+        explanations = []
+        
+        # Director match (weighted more)
+        candidate_directors = candidate.get('directors', [])
+        if isinstance(candidate_directors, list) and self.user_profile['favorite_directors']:
+            director_overlap = set(candidate_directors) & set(self.user_profile['favorite_directors'])
+            if director_overlap:
+                score += 0.7
+                director = list(director_overlap)[0]
+                
+                # Find how many movies by this director user rated highly
+                highly_rated_by_director = sum(
+                    1 for movie in self.user_profile['highly_rated_movies']
+                    if movie.get('title', '').lower()  # Simplified check
+                )
+                
+                explanations.append(f"Directed by {director}")
+        
+        # Actor match
+        candidate_cast = candidate.get('cast', [])
+        if isinstance(candidate_cast, list) and self.user_profile['favorite_actors']:
+            actor_overlap = set(candidate_cast) & set(self.user_profile['favorite_actors'])
+            if actor_overlap:
+                score += 0.3
+                actors = ", ".join(list(actor_overlap)[:2])
+                explanations.append(f"Features {actors}")
+        
+        explanation = "; ".join(explanations) if explanations else ""
+        
+        return min(score, 1.0), explanation
+    
+    def _semantic_similarity_score(self, candidate: Dict) -> Tuple[float, str]:
+        """Calculate semantic similarity using embeddings or TF-IDF"""
+        overview = candidate.get('overview', '')
+        keywords = candidate.get('keywords', [])
+        
+        if not overview and not keywords:
+            return 0.0, ""
+        
+        # Combine overview and keywords
+        candidate_text = overview
+        if keywords and isinstance(keywords, list):
+            candidate_text += " " + " ".join(keywords)
+        
+        # Get text from highly rated movies
+        highly_rated_texts = []
+        for _, movie in self.enriched_ratings[self.enriched_ratings['rating'] >= 4.0].iterrows():
+            text = movie.get('overview', '')
+            movie_keywords = movie.get('keywords', [])
+            if isinstance(movie_keywords, list):
+                text += " " + " ".join(movie_keywords)
+            if text.strip():
+                highly_rated_texts.append(text)
+        
+        if not highly_rated_texts:
+            return 0.0, ""
+        
+        # Use sentence transformers if available
+        if self.embedding_model and SENTENCE_TRANSFORMERS_AVAILABLE:
+            try:
+                candidate_embedding = self.embedding_model.encode([candidate_text])
+                user_embeddings = self.embedding_model.encode(highly_rated_texts)
+                
+                similarities = cosine_similarity(candidate_embedding, user_embeddings)[0]
+                score = float(np.max(similarities))
+                
+                explanation = "Similar themes and plot to your favorites"
+                return score, explanation
+                
+            except Exception as e:
+                print(f"Embedding error: {e}")
+        
+        # Fallback to TF-IDF
+        try:
+            vectorizer = TfidfVectorizer(max_features=100, stop_words='english')
+            all_texts = [candidate_text] + highly_rated_texts
+            tfidf_matrix = vectorizer.fit_transform(all_texts)
+            
+            similarities = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:])[0]
+            score = float(np.max(similarities))
+            
+            explanation = "Similar themes to your favorites"
+            return score, explanation
+            
+        except Exception as e:
+            print(f"TF-IDF error: {e}")
+            return 0.0, ""
+    
+    def _year_preference_score(self, candidate: Dict) -> Tuple[float, str]:
+        """Calculate score based on year/decade preferences"""
+        year = candidate.get('year')
+        
+        if not year or not self.user_profile['favorite_decades']:
+            return 0.0, ""
+        
+        decade = (year // 10) * 10
+        
+        if decade in self.user_profile['favorite_decades']:
+            rank = self.user_profile['favorite_decades'].index(decade)
+            # First favorite gets 1.0, second gets 0.7, third gets 0.4
+            score = 1.0 - (rank * 0.3)
+            explanation = f"From the {decade}s, one of your favorite eras"
+            return score, explanation
+        
+        return 0.0, ""
+    
+    def _format_explanation(self, explanation_parts: Dict) -> str:
+        """Format explanation parts into readable text"""
+        parts = []
+        
+        # Prioritize most interesting explanations
+        for key in ['director_cast', 'genre', 'semantic', 'year']:
+            exp = explanation_parts.get(key, '')
+            if exp:
+                parts.append(exp)
+        
+        if not parts:
+            parts.append(explanation_parts.get('tmdb_similar', 'Recommended based on your taste'))
+        
+        # Return top 2-3 reasons
+        return " • ".join(parts[:3])
+    
+    def _apply_diversity_filter(self, candidates: List[Dict], limit: int) -> List[Dict]:
+        """Apply diversity filtering to prevent too many similar recommendations"""
+        if not candidates:
+            return []
+        
+        diverse_recs = []
+        director_counts = Counter()
+        decade_counts = Counter()
+        genre_counts = Counter()
+        
+        for candidate in candidates:
+            if len(diverse_recs) >= limit:
+                break
+            
+            metadata = candidate.get('metadata', {})
+            
+            # Check director diversity
+            directors = metadata.get('directors', [])
+            director_penalty = 0
+            if directors:
+                for director in directors:
+                    if director_counts[director] >= MAX_SAME_DIRECTOR:
+                        director_penalty = 1.0
+                        break
+                    director_penalty += director_counts[director] * DIVERSITY_PENALTY
+            
+            # Check decade diversity
+            year = metadata.get('year')
+            decade_penalty = 0
+            if year:
+                decade = (year // 10) * 10
+                decade_penalty = decade_counts[decade] * DIVERSITY_PENALTY * 0.5
+            
+            # Check genre diversity
+            genres = metadata.get('genres', [])
+            genre_penalty = 0
+            if genres:
+                for genre in genres:
+                    genre_penalty += genre_counts[genre] * DIVERSITY_PENALTY * 0.3
+                genre_penalty /= max(len(genres), 1)
+            
+            # Total penalty
+            total_penalty = director_penalty + decade_penalty + genre_penalty
+            
+            # Apply penalty to score
+            adjusted_score = candidate['score'] * (1.0 - min(total_penalty, 0.5))
+            
+            if adjusted_score > 0.1:  # Minimum threshold after penalty
+                diverse_recs.append(candidate)
+                
+                # Update counts
+                if directors:
+                    for director in directors:
+                        director_counts[director] += 1
+                if year:
+                    decade_counts[(year // 10) * 10] += 1
+                if genres:
+                    for genre in genres:
+                        genre_counts[genre] += 1
+        
+        return diverse_recs
+    
+    def _extract_year(self, release_date: Optional[str]) -> Optional[int]:
+        """Extract year from release date string"""
+        if not release_date:
+            return None
+        try:
+            return int(release_date.split("-")[0])
+        except (ValueError, IndexError):
+            return None
+    
+    # Keep existing methods for compatibility
+    def find_similar_movies(self, movie_title: str, n: int = 10) -> List[Dict]:
+        """Find movies similar to a specific movie"""
         # Check if movie exists in user's ratings
         user_movie = self.user_ratings[
             self.user_ratings['title'].str.lower() == movie_title.lower()
@@ -193,31 +626,36 @@ class MovieRecommender:
             }]
         
         movie = user_movie.iloc[0]
-        similar = []
         
-        # Find similar by title patterns
-        similar_titles = self._find_similar_by_title(movie['title'])
+        # Try to get TMDB similar movies
+        if self.tmdb_client.is_enabled():
+            # Find TMDB ID
+            metadata = self.tmdb_client.search_movie(movie['title'], movie.get('year'))
+            
+            if metadata:
+                similar = self.tmdb_client.get_similar_movies(metadata['id'], limit=n)
+                
+                results = []
+                for sim_movie in similar:
+                    results.append({
+                        'title': sim_movie.get('title', ''),
+                        'year': self._extract_year(sim_movie.get('release_date')),
+                        'similarity': 0.85,
+                        'explanation': f"Similar themes and style to '{movie['title']}'"
+                    })
+                
+                return results[:n]
         
-        for title in similar_titles[:n]:
-            similar.append({
-                'title': title,
-                'year': movie.get('year'),
-                'similarity': 0.85,
-                'explanation': f"Similar themes and style to '{movie['title']}'"
-            })
-        
-        return similar
+        # Fallback
+        return [{
+            'title': 'The Shawshank Redemption',
+            'year': 1994,
+            'similarity': 0.75,
+            'explanation': f"Highly acclaimed film similar to your taste"
+        }]
     
     def predict_rating(self, movie_title: str) -> Dict:
-        """
-        Predict what rating the user would give to a movie
-        
-        Args:
-            movie_title: Title of the movie to predict rating for
-            
-        Returns:
-            Dictionary with predicted rating and confidence
-        """
+        """Predict what rating the user would give to a movie"""
         if len(self.user_ratings) < 5:
             return {
                 'movie': movie_title,
@@ -228,113 +666,16 @@ class MovieRecommender:
         
         # Use average rating as baseline
         baseline = self.user_profile['avg_rating']
-        
-        # Adjust based on simple heuristics
         predicted = baseline
         confidence = 0.6
         explanation = f"Based on your average rating of {baseline:.1f}"
         
-        # Check if similar movies exist in ratings
-        similar_rated = self._find_similar_rated_movies(movie_title)
-        
-        if similar_rated:
-            # Average ratings of similar movies
-            similar_ratings = [r['rating'] for r in similar_rated]
-            predicted = np.mean(similar_ratings)
-            confidence = 0.8
-            explanation = f"Based on {len(similar_rated)} similar movies you rated"
-        
         return {
             'movie': movie_title,
-            'predicted_rating': round(predicted * 2) / 2,  # Round to nearest 0.5
+            'predicted_rating': round(predicted * 2) / 2,
             'confidence': confidence,
             'explanation': explanation
         }
-    
-    def _find_similar_by_title(self, title: str, n: int = 5) -> List[str]:
-        """Find movies with similar titles (simple word-based matching)"""
-        # Extract key words from title
-        words = set(re.findall(r'\w+', title.lower()))
-        words = {w for w in words if len(w) > 3}  # Filter short words
-        
-        if not words:
-            return []
-        
-        # Sample similar titles (in real implementation, would use a movie database)
-        similar_templates = [
-            f"{title} II",
-            f"The {title} Story",
-            f"Return to {title}",
-            f"{title}: The Sequel",
-            f"Another {title}",
-        ]
-        
-        return similar_templates[:n]
-    
-    def _find_similar_rated_movies(self, title: str) -> List[Dict]:
-        """Find similar movies that user has rated"""
-        # Simple word overlap similarity
-        title_words = set(re.findall(r'\w+', title.lower()))
-        
-        similar = []
-        for _, movie in self.user_ratings.iterrows():
-            movie_words = set(re.findall(r'\w+', movie['title'].lower()))
-            overlap = len(title_words & movie_words)
-            
-            if overlap > 0:
-                similar.append({
-                    'title': movie['title'],
-                    'rating': movie['rating'],
-                    'overlap': overlap
-                })
-        
-        # Sort by overlap
-        similar.sort(key=lambda x: x['overlap'], reverse=True)
-        
-        return similar[:5]
-    
-    def _get_sample_movies_by_decade(self, start_year: int, end_year: int, n: int = 3) -> List[str]:
-        """Get sample movie titles from a decade"""
-        # In a real implementation, this would query a movie database
-        # For now, return generic titles
-        decade = start_year
-        
-        sample_movies = [
-            f"Great {decade}s Drama",
-            f"Classic {decade}s Romance",
-            f"Epic {decade}s Adventure",
-            f"Acclaimed {decade}s Thriller",
-            f"Beloved {decade}s Comedy"
-        ]
-        
-        return sample_movies[:n]
-    
-    def _get_acclaimed_movies(self, n: int = 5) -> List[str]:
-        """Get list of acclaimed movies"""
-        # Sample acclaimed films (in real implementation, would use IMDb/TMDB data)
-        acclaimed = [
-            "The Shawshank Redemption",
-            "The Godfather",
-            "Pulp Fiction",
-            "The Dark Knight",
-            "Schindler's List",
-            "Forrest Gump",
-            "Inception",
-            "Fight Club",
-            "The Matrix",
-            "Goodfellas",
-            "Parasite",
-            "Interstellar",
-            "The Lord of the Rings: The Return of the King",
-            "Spirited Away",
-            "Whiplash"
-        ]
-        
-        # Filter out movies user has already seen
-        watched_titles = set(self.user_ratings['title'].str.lower())
-        acclaimed = [m for m in acclaimed if m.lower() not in watched_titles]
-        
-        return acclaimed[:n]
     
     def get_user_insights(self) -> Dict:
         """Get insights about user's viewing habits"""
@@ -343,15 +684,17 @@ class MovieRecommender:
             'avg_rating': self.user_profile['avg_rating'],
             'rating_tendency': self._get_rating_tendency(),
             'favorite_decade': None,
-            'rating_range': None
+            'rating_range': None,
+            'favorite_genres': self.user_profile['favorite_genres'][:3],
+            'favorite_directors': self.user_profile['favorite_directors'][:3],
         }
         
         if 'rating' in self.user_ratings.columns:
             ratings = self.user_ratings['rating']
             insights['rating_range'] = (ratings.min(), ratings.max())
         
-        if self.user_profile['favorite_years']:
-            insights['favorite_decade'] = f"{int(self.user_profile['favorite_years'][0])}s"
+        if self.user_profile['favorite_decades']:
+            insights['favorite_decade'] = f"{int(self.user_profile['favorite_decades'][0])}s"
         
         return insights
     
