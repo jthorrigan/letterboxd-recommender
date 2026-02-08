@@ -154,7 +154,7 @@ class MovieRecommender:
         # Genre preferences (weighted by rating)
         genre_scores = Counter()
         for _, row in highly_rated.iterrows():
-            if pd.notna(row['genres']) and row['genres'] and isinstance(row['genres'], list):
+            if pd.notna(row['genres']) and isinstance(row['genres'], list) and row['genres']:
                 for genre in row['genres']:
                     genre_scores[genre] += row['rating']
         
@@ -163,7 +163,7 @@ class MovieRecommender:
         # Director preferences
         director_scores = Counter()
         for _, row in highly_rated.iterrows():
-            if pd.notna(row['directors']) and row['directors'] and isinstance(row['directors'], list):
+            if pd.notna(row['directors']) and isinstance(row['directors'], list) and row['directors']:
                 for director in row['directors']:
                     director_scores[director] += row['rating']
         
@@ -172,7 +172,7 @@ class MovieRecommender:
         # Actor preferences (weight by rating and position in cast)
         actor_scores = Counter()
         for _, row in highly_rated.iterrows():
-            if pd.notna(row['cast']) and row['cast'] and isinstance(row['cast'], list):
+            if pd.notna(row['cast']) and isinstance(row['cast'], list) and row['cast']:
                 for i, actor in enumerate(row['cast'][:5]):  # Top 5 cast
                     # Weight by position (lead actors count more)
                     weight = row['rating'] * (1.0 - i * 0.1)
