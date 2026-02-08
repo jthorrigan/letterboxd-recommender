@@ -151,6 +151,10 @@ class MovieRecommender:
         # Analyze highly rated movies from the enriched dataframe
         highly_rated = enriched_df[enriched_df['rating'] >= 4.0]
         
+        # Early return if no highly rated movies
+        if highly_rated.empty:
+            return
+        
         # Genre preferences (weighted by rating)
         genre_scores = Counter()
         for _, row in highly_rated.iterrows():
