@@ -211,17 +211,27 @@ class DataProcessor:
         if self.ratings_df is None or 'rating' not in self.ratings_df.columns:
             return pd.DataFrame()
         
-        return self.ratings_df[self.ratings_df['rating'] >= threshold]
+        # Filter safely to avoid ambiguous truth value errors
+        try:
+            result = self.ratings_df[self.ratings_df['rating'] >= threshold]
+            return result
+        except (KeyError, ValueError, TypeError):
+            return pd.DataFrame()
     
     def get_movies_by_year_range(self, start_year: int, end_year: int) -> pd.DataFrame:
         """Get movies within year range"""
         if self.user_movies is None or 'year' not in self.user_movies.columns:
             return pd.DataFrame()
         
-        return self.user_movies[
-            (self.user_movies['year'] >= start_year) & 
-            (self.user_movies['year'] <= end_year)
-        ]
+        # Filter safely to avoid ambiguous truth value errors
+        try:
+            result = self.user_movies[
+                (self.user_movies['year'] >= start_year) & 
+                (self.user_movies['year'] <= end_year)
+            ]
+            return result
+        except (KeyError, ValueError, TypeError):
+            return pd.DataFrame()
     
     def format_stats_text(self, stats: Dict) -> str:
         """Format statistics as readable text"""
