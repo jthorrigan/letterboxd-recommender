@@ -325,7 +325,10 @@ class MovieRecommender:
             }]
         
         # Get highly rated movies
-        highly_rated = self.user_ratings[self.user_ratings['rating'] >= 4.0] if 'rating' in self.user_ratings.columns else self.user_ratings
+        if 'rating' in self.user_ratings.columns:
+            highly_rated = self.user_ratings[self.user_ratings['rating'] >= 4.0]
+        else:
+            highly_rated = self.user_ratings
         
         if len(highly_rated) == 0:
             return [{
@@ -497,13 +500,15 @@ class MovieRecommender:
         
         # Get text from highly rated movies
         highly_rated_texts = []
-        for _, movie in self.enriched_ratings[self.enriched_ratings['rating'] >= 4.0].iterrows():
-            text = movie.get('overview', '')
-            movie_keywords = movie.get('keywords', [])
-            if isinstance(movie_keywords, list):
-                text += " " + " ".join(movie_keywords)
-            if text.strip():
-                highly_rated_texts.append(text)
+        if 'rating' in self.enriched_ratings.columns:
+            highly_rated_movies = self.enriched_ratings[self.enriched_ratings['rating'] >= 4.0]
+            for _, movie in highly_rated_movies.iterrows():
+                text = movie.get('overview', '')
+                movie_keywords = movie.get('keywords', [])
+                if isinstance(movie_keywords, list):
+                    text += " " + " ".join(movie_keywords)
+                if text.strip():
+                    highly_rated_texts.append(text)
         
         if not highly_rated_texts:
             return 0.0, ""
