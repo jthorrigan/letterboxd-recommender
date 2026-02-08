@@ -498,28 +498,35 @@ class MovieRecommender:
         if keywords and isinstance(keywords, list):
             candidate_text += " " + " ".join(keywords)
         
-# Get text from highly rated movies
-highly_rated_texts = []
+        # Get text from highly rated movies
+        highly_rated_texts = []
 
-# Safety check: ensure rating column exists
-if 'rating' not in self.enriched_ratings.columns:
-    return 0.0, ""
+        # Safety check: ensure rating column exists
+        if 'rating' not in self.enriched_ratings.columns:
+            return 0.0, ""
 
-# Filter highly rated movies safely
-highly_rated_movies = self.enriched_ratings[self.enriched_ratings['rating'] >= 4.0]
+        # Filter highly rated movies safely
+        try:
+            # Handle NaN values in rating column to prevent ambiguous boolean errors
+            highly_rated_movies = self.enriched_ratings[
+                (self.enriched_ratings['rating'].notna()) & 
+                (self.enriched_ratings['rating'] >= 4.0)
+            ]
+        except (KeyError, ValueError, TypeError):
+            return 0.0, ""
 
-# Check if we have any highly rated movies
-if len(highly_rated_movies) == 0:
-    return 0.0, ""
+        # Check if we have any highly rated movies
+        if len(highly_rated_movies) == 0:
+            return 0.0, ""
 
-# Extract text from highly rated movies
-for _, movie in highly_rated_movies.iterrows():
-    text = movie.get('overview', '')
-    movie_keywords = movie.get('keywords', [])
-    if isinstance(movie_keywords, list):
-        text += " " + " ".join(movie_keywords)
-    if text.strip():
-        highly_rated_texts.append(text)
+        # Extract text from highly rated movies
+        for _, movie in highly_rated_movies.iterrows():
+            text = movie.get('overview', '')
+            movie_keywords = movie.get('keywords', [])
+            if isinstance(movie_keywords, list):
+                text += " " + " ".join(movie_keywords)
+            if text.strip():
+                highly_rated_texts.append(text)
         
         if not highly_rated_texts:
             return 0.0, ""
