@@ -214,8 +214,10 @@ class DataProcessor:
         # Filter safely to avoid ambiguous truth value errors
         try:
             result = self.ratings_df[self.ratings_df['rating'] >= threshold]
-            return result
-        except (KeyError, ValueError, TypeError):
+            # Force evaluation to prevent lazy evaluation issues
+            return result.copy()
+        except (KeyError, ValueError, TypeError) as e:
+            print(f"Error filtering highly rated movies: {e}")
             return pd.DataFrame()
     
     def get_movies_by_year_range(self, start_year: int, end_year: int) -> pd.DataFrame:
@@ -225,12 +227,12 @@ class DataProcessor:
         
         # Filter safely to avoid ambiguous truth value errors
         try:
-            result = self.user_movies[
-                (self.user_movies['year'] >= start_year) & 
-                (self.user_movies['year'] <= end_year)
-            ]
-            return result
-        except (KeyError, ValueError, TypeError):
+            mask = (self.user_movies['year'] >= start_year) & (self.user_movies['year'] <= end_year)
+            result = self.user_movies[mask]
+            # Force evaluation to prevent lazy evaluation issues
+            return result.copy()
+        except (KeyError, ValueError, TypeError) as e:
+            print(f"Error filtering movies by year range: {e}")
             return pd.DataFrame()
     
     def format_stats_text(self, stats: Dict) -> str:
