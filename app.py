@@ -10,35 +10,44 @@ from data_processor import DataProcessor
 from scraper import LetterboxdScraper
 from recommender import MovieRecommender
 from visualizations import MovieVisualizer
-from config import APP_TITLE, APP_DESCRIPTION, DEFAULT_N_RECOMMENDATIONS
+from movie_metadata import TMDBClient
+from config import APP_TITLE, APP_DESCRIPTION, DEFAULT_N_RECOMMENDATIONS, TMDB_API_KEY
 
 
 # Global state
 processor = None
 recommender = None
 visualizer = None
+tmdb_client = None
+
+# Initialize TMDB client
+tmdb_client = TMDBClient()
 
 
 def process_csv_upload(ratings_file, watchlist_file=None, watched_file=None):
     """Process uploaded CSV files"""
-    global processor, recommender, visualizer
+    global processor, recommender, visualizer, tmdb_client
     
     if ratings_file is None:
         return "❌ Please upload at least a ratings.csv file", gr.Dropdown(choices=[]), None, None, None, None, None
     
     try:
-        processor = DataProcessor()
+        processor = DataProcessor(tmdb_client)
         result = processor.process_csv_files(ratings_file, watchlist_file, watched_file)
         
         if not result['success']:
             return f"❌ Error: {result['error']}", gr.Dropdown(choices=[]), None, None, None, None, None
         
         # Initialize recommender and visualizer
-        recommender = MovieRecommender(result['ratings'])
+        recommender = MovieRecommender(result['ratings'], tmdb_client)
         visualizer = MovieVisualizer(result['ratings'])
         
         # Format statistics
         stats_text = processor.format_stats_text(result['stats'])
+        
+        # Add TMDB warning if not configured
+        if not tmdb_client.is_enabled():
+            stats_text += "\n\n⚠️ **TMDB API key not configured**. Recommendations are limited.\nSee README for setup instructions to get enhanced recommendations with genre matching, director/actor preferences, and semantic similarity."
         
         # Get movie list for dropdowns
         movie_list = result['ratings']['title'].tolist() if 'title' in result['ratings'].columns else []
@@ -60,7 +69,7 @@ def process_csv_upload(ratings_file, watchlist_file=None, watched_file=None):
 
 def scrape_letterboxd_profile(username):
     """Scrape a Letterboxd profile"""
-    global processor, recommender, visualizer
+    global processor, recommender, visualizer, tmdb_client
     
     if not username or username.strip() == "":
         return "❌ Please enter a Letterboxd username", gr.Dropdown(choices=[]), None, None, None, None, None
@@ -76,13 +85,13 @@ def scrape_letterboxd_profile(username):
             return "❌ No ratings found for this profile", gr.Dropdown(choices=[]), None, None, None, None, None
         
         # Process the scraped data
-        processor = DataProcessor()
+        processor = DataProcessor(tmdb_client)
         processor.ratings_df = result['ratings']
         processor.watchlist_df = result.get('watchlist')
         processor.user_movies = processor._create_unified_dataset()
         
         # Initialize recommender and visualizer
-        recommender = MovieRecommender(result['ratings'])
+        recommender = MovieRecommender(result['ratings'], tmdb_client)
         visualizer = MovieVisualizer(result['ratings'])
         
         # Get movie list for dropdowns

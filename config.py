@@ -37,8 +37,33 @@ SEMANTIC_WEIGHT = 0.3
 PLOT_HEIGHT = 500
 PLOT_TEMPLATE = "plotly_white"
 
-# API Keys (optional - for enhanced metadata)
+# TMDB API Configuration
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
+TMDB_BASE_URL = "https://api.themoviedb.org/3"
+CACHE_EXPIRY_DAYS = 30
+
+# Recommendation Weights (must sum to 1.0)
+GENRE_WEIGHT = 0.30
+DIRECTOR_CAST_WEIGHT = 0.20
+SEMANTIC_WEIGHT = 0.25
+YEAR_WEIGHT = 0.10
+TMDB_SIMILAR_WEIGHT = 0.15
+
+# Validate weights sum to 1.0
+_TOTAL_WEIGHT = GENRE_WEIGHT + DIRECTOR_CAST_WEIGHT + SEMANTIC_WEIGHT + YEAR_WEIGHT + TMDB_SIMILAR_WEIGHT
+if not (0.99 <= _TOTAL_WEIGHT <= 1.01):  # Allow small floating point error
+    raise ValueError(f"Recommendation weights must sum to 1.0, got {_TOTAL_WEIGHT}")
+
+# Quality Filters
+MIN_TMDB_RATING = 6.0
+MIN_TMDB_VOTES = 100
+MAX_SAME_DIRECTOR = 2
+DIVERSITY_PENALTY = 0.15
+
+# Embedding Model
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"  # Fast, good quality sentence transformer
+
+# OMDb API Configuration (optional - for additional metadata)
 OMDB_API_KEY = os.getenv("OMDB_API_KEY", "")
 
 # Data paths

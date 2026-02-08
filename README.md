@@ -142,13 +142,39 @@ Edit `config.py` to customize:
 - Visualization settings
 - API keys (optional, for enhanced metadata)
 
-### Optional: Movie API Integration
+### Getting Better Recommendations (Optional)
 
-For enhanced movie metadata and posters:
+For **significantly enhanced recommendations**, get a free TMDB API key:
+
+1. **Create an account** at [https://www.themoviedb.org/](https://www.themoviedb.org/)
+2. Go to **Settings** → **API** → **Create** → **Developer**
+3. Fill out the form (you can use "Personal/Educational" for type)
+4. Copy your **API Key (v3 auth)**
+5. Add to your environment:
+   - **Local development**: Create a `.env` file (see `.env.example`)
+   - **Hugging Face Spaces**: Add as secret named `TMDB_API_KEY` in Settings
+
+**What you get with TMDB API:**
+- ✅ Recommendations based on actual genres, directors, and actors
+- ✅ Semantic similarity using movie plots and themes
+- ✅ TMDB's "similar movies" algorithm
+- ✅ Quality filtering (minimum ratings, vote counts)
+- ✅ Intelligent explanations (e.g., "You rated 3 other Quentin Tarantino films highly")
+- ✅ Diversity in recommendations (avoids suggesting 10 similar movies)
+
+**Without TMDB API:**
+- ⚠️ Basic recommendations using only your Letterboxd data
+- ⚠️ Limited to decade preferences and acclaimed films
+- ⚠️ No genre/director/actor analysis
+
+The app works without this, but recommendations will be much more basic.
+
+### Optional: Additional Movie API Integration
+
+For enhanced movie metadata and posters (deprecated, use TMDB above):
 
 1. Get free API keys:
-   - [TMDB API](https://www.themoviedb.org/settings/api)
-   - [OMDb API](http://www.omdbapi.com/apikey.aspx)
+   - [OMDb API](http://www.omdbapi.com/apikey.aspx) (optional, for posters)
 
 2. Create a `.env` file:
    ```
@@ -185,34 +211,71 @@ For enhanced movie metadata and posters:
 
 - **Frontend**: [Gradio](https://gradio.app/) 4.19+
 - **Data Processing**: Pandas, NumPy
-- **Machine Learning**: Scikit-learn, SciPy
+- **Machine Learning**: Scikit-learn, SciPy, Sentence-Transformers
+- **Movie Metadata**: TMDB API v3
+- **Semantic Analysis**: Sentence Transformers (all-MiniLM-L6-v2)
 - **Visualizations**: Plotly
 - **Web Scraping**: BeautifulSoup4, Requests
 - **Environment**: Python 3.8+
 
 ## 📊 Recommendation Algorithm
 
-The app uses a **hybrid approach** combining:
+The app uses a **sophisticated hybrid approach** with TMDB integration:
 
-1. **Content-Based Filtering** (40% weight)
-   - Analyzes movie attributes: genres, years, directors
-   - Finds patterns in your highly-rated films
-   - Recommends based on feature similarity
+### With TMDB API (Recommended):
 
-2. **Collaborative Filtering** (30% weight)
-   - Uses matrix factorization (SVD)
-   - Finds users with similar taste
-   - Suggests their favorites you haven't seen
+**Weighted Hybrid Scoring System** (5 factors):
 
-3. **Semantic Analysis** (30% weight)
-   - Analyzes text from reviews (if available)
-   - Identifies themes and preferences
-   - Uses word embeddings for similarity
+1. **Genre Matching** (30% weight)
+   - Analyzes your highly-rated movies to identify favorite genres
+   - Recommends movies matching your genre preferences
+   - Example: "Matches your favorite genres: neo-noir, thriller"
+
+2. **Director/Cast Preferences** (20% weight)
+   - Identifies favorite directors from your ratings
+   - Tracks actors you consistently rate highly
+   - Example: "Directed by Quentin Tarantino" or "Features Tim Roth, Steve Buscemi"
+
+3. **Semantic Similarity** (25% weight)
+   - Uses sentence transformers to analyze movie plots and themes
+   - Creates embeddings from descriptions, keywords, and themes
+   - Finds movies with similar content, not just titles
+   - Example: "Similar themes: heist films, ensemble casts, nonlinear narrative"
+
+4. **Year/Era Preferences** (10% weight)
+   - Identifies your favorite decades from rating history
+   - Considers time period but doesn't over-weight it
+   - Example: "From the 1990s, one of your favorite eras"
+
+5. **TMDB Similarity Algorithm** (15% weight)
+   - Leverages TMDB's own "similar movies" recommendations
+   - Based on their collaborative filtering and metadata
+
+**Quality Filters:**
+- ✅ Minimum TMDB rating (6.0+) and vote count (100+ votes)
+- ✅ Excludes movies you've already watched
+- ✅ Filters out obvious sequels/prequels of watched movies
+- ✅ Prevents recommending movies with just similar titles
+
+**Diversity Algorithm:**
+- Limits recommendations to max 2 movies per director
+- Balances across different time periods
+- Mixes sub-genres to avoid repetition
+- Applies diversity penalty to prevent clustering
+
+### Without TMDB API (Basic Mode):
+
+1. **Decade-Based Filtering** (simplified)
+   - Recommends from your favorite decades
+   - Uses a curated list of acclaimed films
+
+2. **Basic Title Analysis** (minimal)
+   - Simple word-based matching
 
 **Result**: Each recommendation shows:
 - Match score (0-100%)
-- Explanation of why it's recommended
-- Relevant metadata
+- **2-3 specific reasons** why it's recommended
+- Relevant metadata (year, genres, cast)
 
 ## 🔒 Privacy & Ethics
 
