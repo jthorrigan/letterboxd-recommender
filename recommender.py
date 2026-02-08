@@ -649,9 +649,6 @@ class MovieRecommender:
                 decade_penalty = decade_counts[decade] * DIVERSITY_PENALTY * 0.5
             
             # Check genre diversity
-            # Genre penalty is averaged because a movie can have multiple genres,
-            # and we want to encourage cross-genre recommendations rather than penalize
-            # movies that happen to share one genre with previous recommendations
             genres = metadata.get('genres', [])
             genre_penalty = 0
             if genres:
