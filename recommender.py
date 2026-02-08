@@ -148,13 +148,13 @@ class MovieRecommender:
         if 'rating' not in enriched_df.columns:
             return
         
-        # Analyze highly rated movies
-        highly_rated = self._get_highly_rated_movies()
+        # Analyze highly rated movies from the enriched dataframe
+        highly_rated = enriched_df[enriched_df['rating'] >= 4.0] if 'rating' in enriched_df.columns else enriched_df
         
         # Genre preferences (weighted by rating)
         genre_scores = Counter()
         for _, row in highly_rated.iterrows():
-            if row['genres'] and isinstance(row['genres'], list):
+            if 'genres' in row and row['genres'] and isinstance(row['genres'], list):
                 for genre in row['genres']:
                     genre_scores[genre] += row['rating']
         
@@ -163,7 +163,7 @@ class MovieRecommender:
         # Director preferences
         director_scores = Counter()
         for _, row in highly_rated.iterrows():
-            if row['directors'] and isinstance(row['directors'], list):
+            if 'directors' in row and row['directors'] and isinstance(row['directors'], list):
                 for director in row['directors']:
                     director_scores[director] += row['rating']
         
@@ -172,7 +172,7 @@ class MovieRecommender:
         # Actor preferences (weight by rating and position in cast)
         actor_scores = Counter()
         for _, row in highly_rated.iterrows():
-            if row['cast'] and isinstance(row['cast'], list):
+            if 'cast' in row and row['cast'] and isinstance(row['cast'], list):
                 for i, actor in enumerate(row['cast'][:5]):  # Top 5 cast
                     # Weight by position (lead actors count more)
                     weight = row['rating'] * (1.0 - i * 0.1)
