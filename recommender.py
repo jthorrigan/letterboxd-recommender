@@ -107,7 +107,13 @@ class MovieRecommender:
         """Helper method to get highly rated movies"""
         if 'rating' not in self.user_ratings.columns:
             return pd.DataFrame()
-        return self.user_ratings[self.user_ratings['rating'] >= threshold]
+        
+        # Filter safely to avoid ambiguous truth value errors
+        try:
+            result = self.user_ratings[self.user_ratings['rating'] >= threshold]
+            return result
+        except (KeyError, ValueError, TypeError):
+            return pd.DataFrame()
     
     def _enrich_user_ratings(self) -> pd.DataFrame:
         """Enrich user ratings with TMDB metadata"""
@@ -149,7 +155,11 @@ class MovieRecommender:
             return
         
         # Analyze highly rated movies from the enriched dataframe
-        highly_rated = enriched_df[enriched_df['rating'] >= 4.0]
+        # Filter safely to avoid ambiguous truth value errors
+        try:
+            highly_rated = enriched_df[enriched_df['rating'] >= 4.0]
+        except (KeyError, ValueError, TypeError):
+            return
         
         # Early return if no highly rated movies
         if highly_rated.empty:
@@ -326,7 +336,11 @@ class MovieRecommender:
         
         # Get highly rated movies
         if 'rating' in self.user_ratings.columns:
-            highly_rated = self.user_ratings[self.user_ratings['rating'] >= 4.0]
+            # Filter safely to avoid ambiguous truth value errors
+            try:
+                highly_rated = self.user_ratings[self.user_ratings['rating'] >= 4.0]
+            except (KeyError, ValueError, TypeError):
+                highly_rated = pd.DataFrame()
         else:
             highly_rated = self.user_ratings
         
