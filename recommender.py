@@ -85,7 +85,7 @@ class MovieRecommender:
             profile['rating_std'] = self.user_ratings['rating'].std()
             
             # Get highly rated movies (>= 4.0)
-            highly_rated = self.user_ratings[self.user_ratings['rating'] >= 4.0]
+            highly_rated = self._get_highly_rated_movies()
             profile['highly_rated_movies'] = highly_rated[['title', 'year', 'rating']].to_dict('records')
         
         # Watched titles for filtering
@@ -103,6 +103,12 @@ class MovieRecommender:
         
         return profile
     
+    def _get_highly_rated_movies(self, threshold: float = 4.0) -> pd.DataFrame:
+        """Helper method to get highly rated movies"""
+        if 'rating' not in self.user_ratings.columns:
+            return pd.DataFrame()
+        return self.user_ratings[self.user_ratings['rating'] >= threshold]
+    
     def _enrich_user_ratings(self) -> pd.DataFrame:
         """Enrich user ratings with TMDB metadata"""
         if not self.tmdb_client.is_enabled():
@@ -119,7 +125,7 @@ class MovieRecommender:
         enriched['tmdb_id'] = None
         
         # Fetch metadata for highly rated movies
-        highly_rated = enriched[enriched['rating'] >= 4.0] if 'rating' in enriched.columns else enriched
+        highly_rated = self._get_highly_rated_movies() if 'rating' in enriched.columns else enriched
         
         for idx, row in highly_rated.iterrows():
             metadata = self.tmdb_client.get_movie_metadata(row['title'], row.get('year'))
@@ -143,7 +149,7 @@ class MovieRecommender:
             return
         
         # Analyze highly rated movies
-        highly_rated = enriched_df[enriched_df['rating'] >= 4.0]
+        highly_rated = self._get_highly_rated_movies()
         
         # Genre preferences (weighted by rating)
         genre_scores = Counter()
@@ -184,7 +190,7 @@ class MovieRecommender:
         seen_ids = set()
         
         # Get similar movies from TMDB for highly rated films
-        highly_rated = self.enriched_ratings[self.enriched_ratings['rating'] >= 4.0] if 'rating' in self.enriched_ratings.columns else self.enriched_ratings
+        highly_rated = self._get_highly_rated_movies() if 'rating' in self.enriched_ratings.columns else self.enriched_ratings
         
         for _, movie in highly_rated.head(10).iterrows():
             # Get TMDB similar movies
@@ -261,20 +267,30 @@ class MovieRecommender:
         """Check if movie appears to be a sequel of a watched movie"""
         title_lower = title.lower()
         
-        # Common sequel patterns
+        # Common sequel patterns with word boundaries
         sequel_patterns = [
-            r'\s+(?:ii|iii|iv|v|vi|vii|viii|ix|x)(?:\s|$)',
-            r'\s+(?:2|3|4|5|6|7|8|9)(?:\s|:|$)',
-            r':\s*(?:part|chapter|episode)\s+\d+',
-            r'\s+(?:returns|revenge|reloaded|resurrection|the sequel|strikes back)',
+            r'\b(?:ii|iii|iv|v|vi|vii|viii|ix|x)\b',  # Roman numerals
+            r'\b(?:2|3|4|5|6|7|8|9)\b',  # Numbers
+            r':\s*(?:part|chapter|episode)\s+\d+',  # Part/Chapter/Episode
+            r'\b(?:returns|revenge|reloaded|resurrection|the sequel|strikes back)\b',  # Sequel keywords
         ]
         
         for pattern in sequel_patterns:
-            if re.search(pattern, title_lower):
-                # Check if base title is in watched movies
+            match = re.search(pattern, title_lower)
+            if match:
+                # Extract base title by removing the sequel pattern
                 base_title = re.sub(pattern, '', title_lower).strip()
+                # Remove trailing punctuation
+                base_title = re.sub(r'[:\-\s]+$', '', base_title).strip()
+                
+                # Check if base title matches any watched movie (with word boundaries)
                 for watched in self.user_profile['watched_titles_lower']:
-                    if base_title in watched or watched in base_title:
+                    watched_base = watched.strip()
+                    # Check for substantial match (at least 70% of the base title)
+                    if len(base_title) >= 4 and (
+                        base_title in watched_base or 
+                        watched_base in base_title and len(watched_base) >= len(base_title) * 0.7
+                    ):
                         return True
         
         return False
@@ -400,6 +416,10 @@ class MovieRecommender:
         candidate_genres_set = set(candidate_genres) if isinstance(candidate_genres, list) else set()
         favorite_genres_set = set(self.user_profile['favorite_genres'])
         
+        # Check if sets are non-empty after conversion
+        if not candidate_genres_set or not favorite_genres_set:
+            return 0.0, ""
+        
         overlap = candidate_genres_set & favorite_genres_set
         
         if not overlap:
@@ -427,13 +447,23 @@ class MovieRecommender:
                 score += 0.7
                 director = list(director_overlap)[0]
                 
-                # Find how many movies by this director user rated highly
-                highly_rated_by_director = sum(
-                    1 for movie in self.user_profile['highly_rated_movies']
-                    if movie.get('title', '').lower()  # Simplified check
-                )
+                # Count how many highly rated movies by this director the user has
+                director_movie_count = 0
+                for movie in self.user_profile['highly_rated_movies']:
+                    # Check if this movie has director metadata and matches
+                    movie_directors = None
+                    for _, enriched_movie in self.enriched_ratings.iterrows():
+                        if enriched_movie['title'] == movie.get('title'):
+                            movie_directors = enriched_movie.get('directors')
+                            break
+                    
+                    if movie_directors and isinstance(movie_directors, list) and director in movie_directors:
+                        director_movie_count += 1
                 
-                explanations.append(f"Directed by {director}")
+                if director_movie_count > 1:
+                    explanations.append(f"You rated {director_movie_count} {director} films highly")
+                else:
+                    explanations.append(f"Directed by {director}")
         
         # Actor match
         candidate_cast = candidate.get('cast', [])
@@ -573,6 +603,9 @@ class MovieRecommender:
                 decade_penalty = decade_counts[decade] * DIVERSITY_PENALTY * 0.5
             
             # Check genre diversity
+            # Genre penalty is averaged because a movie can have multiple genres,
+            # and we want to encourage cross-genre recommendations rather than penalize
+            # movies that happen to share one genre with previous recommendations
             genres = metadata.get('genres', [])
             genre_penalty = 0
             if genres:

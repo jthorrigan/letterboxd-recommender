@@ -5,7 +5,7 @@ Provides rich movie data including genres, directors, cast, keywords, and simila
 import os
 import json
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 from datetime import datetime, timedelta
 import requests
 from pathlib import Path
@@ -346,7 +346,7 @@ class TMDBClient:
             print(f"Error reading cache for {cache_key}: {e}")
             return None
     
-    def _save_to_cache(self, cache_key: str, data: Dict) -> None:
+    def _save_to_cache(self, cache_key: str, data: Union[Dict, List[Dict]]) -> None:
         """Save data to cache"""
         cache_path = self._get_cache_path(cache_key)
         
